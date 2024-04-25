@@ -2,14 +2,19 @@ package caddy
 
 import (
 	"fmt"
+	"github.com/caddyserver/caddy/v2"
+	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
+	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
+	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+)
 
-	"github.com/caddyserver/caddy/v2/caddyconfig/caddyfile"
-	"github.com/caddyserver/caddy/v2/caddyconfig/httpcaddyfile"
-	"github.com/caddyserver/caddy/v2/modules/caddyhttp"
+const (
+	// ReplErrStr represents error replacement string.
+	ReplErrStr string = "ERROR_REPLACEMENT"
 )
 
 func init() {
@@ -30,7 +35,7 @@ type BlockingConfiguration struct {
 
 type Config struct {
 	SablierURL      string
-	Names           []string
+	Names           string
 	Group           string
 	SessionDuration *time.Duration
 	Dynamic         *DynamicConfiguration
@@ -40,30 +45,42 @@ type Config struct {
 func CreateConfig() *Config {
 	return &Config{
 		SablierURL:      "http://sablier:10000",
-		Names:           []string{},
+		Names:           "", //{},
 		SessionDuration: nil,
 		Dynamic:         nil,
 		Blocking:        nil,
 	}
 }
 
+// FindReplace uses caddy.Replacer to replace strings in a given string.
+func (c *Config) FindReplace(repl *caddy.Replacer, s string) string {
+	return repl.ReplaceAll(s, "ERROR_REPLACEMENT")
+}
+
+// FindReplaceAll uses caddy.Replacer to replace strings in a given slice.
+func (c *Config) FindReplaceAll(repl *caddy.Replacer, arr []string) (output []string) {
+	for _, item := range arr {
+		output = append(output, repl.ReplaceAll(item, "ERROR_REPLACEMENT"))
+	}
+	return output
+}
+
 // UnmarshalCaddyfile implements caddyfile.Unmarshaler. Syntax:
 //
-//		sablier [<sablierURL>] {
-//			[names container1,container2,...]
-//			[group mygroup]
-//			[session_duration 30m]
-//			dynamic {
-//				[display_name This is my display name]
-//				[show_details yes|true|on]
-//				[theme hacker-terminal]
-//				[refresh_frequency 2s]
-//			}
-//			blocking {
-//				[timeout 1m]
-//			}
+//	sablier [<sablierURL>] {
+//		[names container1,container2,...]
+//		[group mygroup]
+//		[session_duration 30m]
+//		dynamic {
+//			[display_name This is my display name]
+//			[show_details yes|true|on]
+//			[theme hacker-terminal]
+//			[refresh_frequency 2s]
 //		}
-//
+//		blocking {
+//			[timeout 1m]
+//		}
+//	}
 func (c *Config) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 	for d.Next() {
 		if d.NextArg() {
@@ -79,7 +96,7 @@ func (c *Config) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			args := strings.Join(d.RemainingArgs(), " ")
 			switch subdirective {
 			case "names":
-				c.Names = parseNames(args)
+				c.Names = args // parseNames(args)
 			case "group":
 				c.Group = args
 			case "session_duration":
@@ -190,16 +207,20 @@ func isEnabledArg(s string) bool {
 	return false
 }
 
-func (c *Config) BuildRequest() (*http.Request, error) {
+func (c *Config) BuildRequest(repl *caddy.Replacer) (*http.Request, error) {
 	if c.Dynamic != nil {
-		return c.buildDynamicRequest()
+		return c.buildDynamicRequest(repl)
 	} else if c.Blocking != nil {
 		return c.buildBlockingRequest()
 	}
 	return nil, fmt.Errorf("no strategy configured")
 }
 
-func (c *Config) buildDynamicRequest() (*http.Request, error) {
+func (c *Config) buildDynamicRequest(repl *caddy.Replacer) (*http.Request, error) {
+	//        repl := ctx.Value(caddy.ReplacerCtxKey).(*caddy.Replacer)
+
+	//        sm.Config.Names = FindReplaceAll(repl, sm.Config.Names)
+
 	if c.Dynamic == nil {
 		return nil, fmt.Errorf("dynamic config is nil")
 	}
@@ -215,16 +236,23 @@ func (c *Config) buildDynamicRequest() (*http.Request, error) {
 		q.Add("session_duration", c.SessionDuration.String())
 	}
 
-	for _, name := range c.Names {
-		q.Add("names", name)
+	if c.Names != "" {
+		//		q.Add("names", parseNames(c.FindReplace(repl, name))
+		nemes := parseNames(c.FindReplace(repl, c.Names))
+		for _, name := range nemes {
+			q.Add("names", name)
+		}
 	}
+	//	for _, name := range c.Names {
+	//		q.Add("names", c.FindReplace(repl, name))
+	//	}
 
 	if c.Group != "" {
 		q.Add("group", c.Group)
 	}
 
 	if c.Dynamic.DisplayName != "" {
-		q.Add("display_name", c.Dynamic.DisplayName)
+		q.Add("display_name", c.FindReplace(repl, c.Dynamic.DisplayName))
 	}
 
 	if c.Dynamic.Theme != "" {
@@ -260,7 +288,7 @@ func (c *Config) buildBlockingRequest() (*http.Request, error) {
 		q.Add("session_duration", c.SessionDuration.String())
 	}
 
-	for _, name := range c.Names {
+	for _, name := range parseNames(c.Names) {
 		q.Add("names", name)
 	}
 
